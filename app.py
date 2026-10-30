@@ -1225,6 +1225,7 @@ def render_compare_tab(
     shared = float(
         mix.loc[mix["availability"].eq("Both"), "road_km"].sum()
     )
+    combined_pct = union_km / denominator * 100.0 if denominator > 0 else 0.0
     map_pct = float(totals.loc["Mapillary", "touched_pct"]) if "Mapillary" in totals.index else 0.0
     karta_pct = float(totals.loc["KartaView", "touched_pct"]) if "KartaView" in totals.index else 0.0
 
@@ -1243,10 +1244,9 @@ def render_compare_tab(
         "Shared network",
         f"{shared:,.0f} km",
     )
-    lead = map_pct - karta_pct
     metric_cols[3].metric(
-        f"{'Mapillary' if lead >= 0 else 'KartaView'} ahead",
-        f"{abs(lead):.2f} points",
+        f"Combined coverage · {union_km:,.0f} km",
+        f"{combined_pct:.2f}%",
     )
 
     st.subheader("Provider availability across the selected road network")
