@@ -319,6 +319,15 @@ def load_cumulative_overlap(
     return frame[pd.to_numeric(frame["cutoff_year"]).eq(int(cutoff_year))].copy()
 
 
+@st.cache_data(show_spinner=False)
+def load_overlap_history(path: str, version: int) -> pd.DataFrame:
+    """Load all cutoff years for combined any-source coverage trends."""
+    del version
+    frame = pd.read_csv(path)
+    frame["cutoff_year"] = pd.to_numeric(frame["cutoff_year"]).astype(int)
+    return frame
+
+
 def cumulative_chart(frame: pd.DataFrame) -> alt.Chart:
     providers = list(dict.fromkeys(frame["provider"].astype(str)))
     return (
@@ -390,8 +399,8 @@ def comparison_class_chart(frame: pd.DataFrame) -> alt.Chart:
 def overlap_chart(frame: pd.DataFrame) -> alt.VConcatChart:
     order = ["Mapillary only", "Both", "KartaView only", "Neither"]
     colors = [PROVIDER_COLORS["Mapillary"], "#33443d", PROVIDER_COLORS["KartaView"], "#c8ceca"]
-    tick_step = 50_000
     total_road_km = float(frame["road_km"].sum())
+    tick_step = 10_000 if total_road_km <= 100_000 else 50_000
     axis_max = max(tick_step, int(np.ceil(total_road_km / tick_step) * tick_step))
     tick_values = list(range(0, axis_max + tick_step, tick_step))
     shared_scale = alt.Scale(domain=[0, axis_max], nice=False)
@@ -450,6 +459,96 @@ def overlap_chart(frame: pd.DataFrame) -> alt.VConcatChart:
         .properties(height=1)
     )
     return alt.vconcat(bars, axis, spacing=2).resolve_scale(x="shared")
+
+
+def combined_coverage_bar(frame: pd.DataFrame) -> alt.VConcatChart:
+    colors = ["#246b57", "#d7dcd9"]
+    total_road_km = float(frame["road_km"].sum())
+    tick_step = 50_000
+    axis_max = max(tick_step, int(np.ceil(total_road_km / tick_step) * tick_step))
+    tick_values = list(range(0, axis_max + tick_step, tick_step))
+    shared_scale = alt.Scale(domain=[0, axis_max], nice=False)
+    bars = (
+        alt.Chart(frame)
+        .mark_bar(size=48)
+        .encode(
+            x=alt.X("road_km:Q", stack="zero", axis=None, scale=shared_scale),
+            color=alt.Color(
+                "status:N",
+                title=None,
+                sort=["Covered by any source", "No imagery found"],
+                scale=alt.Scale(
+                    domain=["Covered by any source", "No imagery found"],
+                    range=colors,
+                ),
+                legend=alt.Legend(orient="top", direction="horizontal"),
+            ),
+            order=alt.Order("order:Q"),
+            tooltip=[
+                alt.Tooltip("status:N", title="Status"),
+                alt.Tooltip("road_km:Q", title="Road network", format=",.0f"),
+                alt.Tooltip("share_pct:Q", title="Share", format=".2f"),
+            ],
+        )
+        .properties(height=58)
+    )
+    axis = (
+        alt.Chart(pd.DataFrame({"road_km": [0, axis_max]}))
+        .mark_point(opacity=0)
+        .encode(
+            x=alt.X(
+                "road_km:Q",
+                scale=shared_scale,
+                axis=alt.Axis(
+                    values=tick_values,
+                    format=",d",
+                    labelColor="#27332e",
+                    labelFontSize=13,
+                    labelPadding=9,
+                    tickColor="#75827c",
+                    tickSize=7,
+                    domainColor="#75827c",
+                    grid=False,
+                    title="Selected road network (km)",
+                    titleColor="#46554f",
+                    titleFontSize=13,
+                    titlePadding=16,
+                ),
+            )
+        )
+        .properties(height=1)
+    )
+    return alt.vconcat(bars, axis, spacing=2).resolve_scale(x="shared")
+
+
+def combined_trend_chart(frame: pd.DataFrame) -> alt.Chart:
+    return (
+        alt.Chart(frame)
+        .mark_area(
+            line={"color": "#246b57", "strokeWidth": 3},
+            point={"filled": True, "fill": "#246b57", "size": 70},
+            color="#b8d6cc",
+            opacity=0.55,
+        )
+        .encode(
+            x=alt.X(
+                "cutoff_year:O",
+                title="Coverage through year",
+                axis=alt.Axis(labelAngle=0),
+            ),
+            y=alt.Y(
+                "coverage_pct:Q",
+                title="Road network with imagery (%)",
+                scale=alt.Scale(zero=True),
+            ),
+            tooltip=[
+                alt.Tooltip("cutoff_year:O", title="Through year"),
+                alt.Tooltip("covered_km:Q", title="Roads with imagery", format=",.0f"),
+                alt.Tooltip("coverage_pct:Q", title="Coverage", format=".2f"),
+            ],
+        )
+        .properties(height=320)
+    )
 
 
 def road_class_chart(frame: pd.DataFrame) -> alt.Chart:
@@ -700,6 +799,7 @@ def render_covered_roads_map(
     road_classes: list[str],
     focus: tuple[float, float, float] | None,
     show_source_tracks: bool,
+    color_by_provider: bool,
 ) -> None:
     st.subheader("Roads with imagery coverage")
     if not WASHINGTON_BOUNDARY.is_file():
@@ -765,7 +865,11 @@ def render_covered_roads_map(
                 tuple(road_classes),
                 focus,
             )
-            color_hex = PROVIDER_COLORS.get(provider, "#56635d").lstrip("#")
+            color_hex = (
+                PROVIDER_COLORS.get(provider, "#56635d")
+                if color_by_provider
+                else "#246b57"
+            ).lstrip("#")
             rgb = [int(color_hex[i : i + 2], 16) for i in (0, 2, 4)]
             for bucket in ("low", "partial", "high", "full"):
                 if bucket not in coverage_layers:
@@ -870,7 +974,8 @@ def render_covered_roads_map(
             height=560,
             key=(
                 f"covered-road-map-v5-{provider_key}-{years_key}-"
-                f"{focus if focus is not None else 'statewide'}-{show_source_tracks}"
+                f"{focus if focus is not None else 'statewide'}-{show_source_tracks}-"
+                f"{color_by_provider}"
             ),
         )
         count_summary = "; ".join(
@@ -890,10 +995,15 @@ def render_covered_roads_map(
                 f"{focus[1]:.5f}"
             )
         )
+        color_note = (
+            "Mapillary is teal; KartaView is purple."
+            if color_by_provider
+            else "Coverage from either source is shown in green."
+        )
         st.caption(
             f"{time_label} · {location_summary} · {count_summary}. "
-            "Mapillary is teal; KartaView is purple. Wide translucent lines are "
-            "derived covered roads; narrow solid lines are original provider tracks."
+            f"{color_note} Wide translucent lines are derived covered roads; "
+            "narrow solid lines are original provider tracks."
             + (
                 " Statewide geometry is generalized to map scale; coordinate searches "
                 "retain full detail."
@@ -941,17 +1051,30 @@ def render_explore_tab(
         years_to_show = [focus_year]
         time_label = str(focus_year)
         cumulative_col.caption(f"Showing imagery captured in {focus_year} only.")
-    provider_toggle_cols = st.columns(2)
-    show_mapillary = provider_toggle_cols[0].checkbox(
-        "Mapillary layer",
-        value=True,
-        key="show_mapillary_layer",
-    )
-    show_kartaview = provider_toggle_cols[1].checkbox(
-        "KartaView layer",
-        value=True,
-        key="show_kartaview_layer",
-    )
+    show_mapillary = True
+    show_kartaview = True
+    color_by_provider = False
+    with st.expander("Source display", expanded=False):
+        st.caption(
+            "Coverage from either source is combined by default. Use these controls "
+            "when provider attribution is needed."
+        )
+        provider_toggle_cols = st.columns(2)
+        show_mapillary = provider_toggle_cols[0].checkbox(
+            "Mapillary",
+            value=True,
+            key="show_mapillary_layer",
+        )
+        show_kartaview = provider_toggle_cols[1].checkbox(
+            "KartaView",
+            value=True,
+            key="show_kartaview_layer",
+        )
+        color_by_provider = st.toggle(
+            "Color coverage by source",
+            value=False,
+            key="color_coverage_by_provider",
+        )
     providers_to_show = [
         provider
         for provider, visible in (
@@ -967,7 +1090,7 @@ def render_explore_tab(
             float(st.session_state["focus_longitude"]),
             float(st.session_state.get("radius_km", 5)),
         )
-    show_source_tracks = bool(st.session_state.get("show_source_tracks", True))
+    show_source_tracks = bool(st.session_state.get("show_source_tracks", False))
     if cumulative_mode:
         st.caption(
             "Cumulative modes union unique road segments touched in any included "
@@ -984,6 +1107,7 @@ def render_explore_tab(
         selected_classes,
         focus_location,
         show_source_tracks,
+        color_by_provider,
     )
 
     st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
@@ -1033,15 +1157,20 @@ def render_explore_tab(
             st.rerun()
         st.checkbox(
             "Show original provider tracks",
-            value=True,
+            value=False,
             key="show_source_tracks",
             help=(
                 "Narrow provider-colored lines are source sequence geometry. "
                 "Wide translucent lines are derived Overture-road coverage."
             ),
         )
+        coverage_style = (
+            "teal/purple provider coverage"
+            if color_by_provider
+            else "green any-source coverage"
+        )
         st.caption(
-            "Map layers: light basemap roads · teal/purple derived road coverage · "
+            f"Map layers: light basemap roads · {coverage_style} · "
             "narrow provider-colored source tracks · white dot searched coordinate."
         )
 
@@ -1164,9 +1293,11 @@ def render_trends_tab(
         )
 
 
-def render_compare_tab(
+def render_coverage_tab(
     cumulative: pd.DataFrame,
     overlap: pd.DataFrame,
+    overlap_history: pd.DataFrame,
+    statewide: pd.DataFrame,
     by_class: pd.DataFrame,
     available_years: list[int],
     selected_classes: list[str],
@@ -1190,15 +1321,6 @@ def render_compare_tab(
         provider_class["touched_road_km"] / provider_class["total_road_km"] * 100.0,
         0.0,
     )
-    totals = (
-        provider_class.groupby("provider", as_index=False)
-        .agg(touched_road_km=("touched_road_km", "sum"))
-    )
-    totals["touched_pct"] = np.where(
-        denominator > 0, totals["touched_road_km"] / denominator * 100.0, 0.0
-    )
-    totals = totals.set_index("provider")
-
     selected_overlap = overlap[overlap["road_class"].isin(selected_classes)].copy()
     mix = (
         selected_overlap.groupby("availability", as_index=False)
@@ -1222,58 +1344,116 @@ def render_compare_tab(
     mix["share_pct"] = np.where(
         denominator > 0, mix["road_km"] / denominator * 100.0, 0.0
     )
-    shared = float(
-        mix.loc[mix["availability"].eq("Both"), "road_km"].sum()
-    )
     combined_pct = union_km / denominator * 100.0 if denominator > 0 else 0.0
-    map_pct = float(totals.loc["Mapillary", "touched_pct"]) if "Mapillary" in totals.index else 0.0
-    karta_pct = float(totals.loc["KartaView", "touched_pct"]) if "KartaView" in totals.index else 0.0
-
-    metric_cols = st.columns(4)
+    metric_cols = st.columns(2)
     metric_cols[0].metric(
-        f"Mapillary · {map_pct:.2f}%",
-        f"{float(totals.loc['Mapillary', 'touched_road_km']):,.0f} km"
-        if "Mapillary" in totals.index else "Pending",
-    )
-    metric_cols[1].metric(
-        f"KartaView · {karta_pct:.2f}%",
-        f"{float(totals.loc['KartaView', 'touched_road_km']):,.0f} km"
-        if "KartaView" in totals.index else "Pending",
-    )
-    metric_cols[2].metric(
-        "Shared network",
-        f"{shared:,.0f} km",
-    )
-    metric_cols[3].metric(
-        f"Combined coverage · {union_km:,.0f} km",
+        f"Roads with imagery · {union_km:,.0f} km",
         f"{combined_pct:.2f}%",
     )
-
-    st.subheader("Provider availability across the selected road network")
-    availability = mix.set_index("availability")
-    availability_cols = st.columns(4)
-    for column, category in zip(
-        availability_cols,
-        ("Mapillary only", "Both", "KartaView only", "Neither"),
-    ):
-        if category in availability.index:
-            row = availability.loc[category]
-            column.metric(category, f"{float(row['road_km']):,.0f} km")
-            column.caption(f"{float(row['share_pct']):.2f}% of selected roads")
-        else:
-            column.metric(category, "0 km")
-            column.caption("0.00% of selected roads")
-    st.altair_chart(overlap_chart(mix), use_container_width=True)
-    st.caption(
-        "Teal: Mapillary only · charcoal: both · purple: KartaView only · gray: neither. "
-        "Availability uses unique Overture segments of at most 50 metres; “both” "
-        "means each provider touched the segment by the selected cutoff year."
+    metric_cols[1].metric(
+        f"Coverage gap · {neither_km:,.0f} km",
+        f"{100.0 - combined_pct:.2f}%",
     )
-    st.subheader("Comparison by road class")
-    if provider_class.empty:
-        st.info("No cumulative coverage is available for these classes.")
-    else:
-        st.altair_chart(comparison_class_chart(provider_class), use_container_width=True)
+
+    coverage_status = pd.DataFrame(
+        [
+            {
+                "status": "Covered by any source",
+                "road_km": union_km,
+                "share_pct": combined_pct,
+                "order": 0,
+            },
+            {
+                "status": "No imagery found",
+                "road_km": neither_km,
+                "share_pct": 100.0 - combined_pct,
+                "order": 1,
+            },
+        ]
+    )
+    st.subheader("Coverage across the selected road network")
+    st.altair_chart(combined_coverage_bar(coverage_status), use_container_width=True)
+
+    combined_history = (
+        overlap_history[
+            overlap_history["road_class"].isin(selected_classes)
+        ]
+        .groupby("cutoff_year", as_index=False)
+        .agg(covered_km=("road_km", "sum"))
+        .sort_values("cutoff_year")
+    )
+    combined_history["coverage_pct"] = np.where(
+        denominator > 0,
+        combined_history["covered_km"] / denominator * 100.0,
+        0.0,
+    )
+    st.subheader("Combined coverage over time")
+    st.altair_chart(combined_trend_chart(combined_history), use_container_width=True)
+    st.caption(
+        "Each road segment is counted once after imagery first becomes available "
+        "from either provider."
+    )
+
+    with st.expander("Source details", expanded=False):
+        st.caption(
+            "Provider attribution is secondary to statewide availability. Percentages "
+            "below use only the covered road network as the denominator."
+        )
+        source_mix = mix[~mix["availability"].eq("Neither")].copy()
+        source_mix["share_pct"] = np.where(
+            union_km > 0, source_mix["road_km"] / union_km * 100.0, 0.0
+        )
+        source_lookup = source_mix.set_index("availability")
+        source_cols = st.columns(3)
+        for column, category in zip(
+            source_cols, ("Mapillary only", "Both", "KartaView only")
+        ):
+            if category in source_lookup.index:
+                row = source_lookup.loc[category]
+                column.metric(category, f"{float(row['road_km']):,.0f} km")
+                column.caption(f"{float(row['share_pct']):.1f}% of covered roads")
+            else:
+                column.metric(category, "0 km")
+                column.caption("0.0% of covered roads")
+        st.altair_chart(overlap_chart(source_mix), use_container_width=True)
+        st.caption(
+            "“Both” means each provider touched the same canonical road segment by "
+            "the selected cutoff year; it is not an exact geometric overlap."
+        )
+
+        st.markdown("#### Provider coverage by road class")
+        if provider_class.empty:
+            st.info("No provider coverage is available for these classes.")
+        else:
+            st.altair_chart(
+                comparison_class_chart(provider_class), use_container_width=True
+            )
+
+        provider_trend, _, _ = cumulative_view(
+            cumulative, by_class, selected_classes
+        )
+        st.markdown("#### Provider cumulative trends")
+        st.altair_chart(cumulative_chart(provider_trend), use_container_width=True)
+
+        st.markdown("#### Annual source metrics")
+        detail = statewide[
+            [
+                "provider",
+                "capture_year",
+                "covered_road_km",
+                "road_km_with_any_coverage",
+                "segments_with_coverage",
+                "coverage_pct",
+            ]
+        ].sort_values(["capture_year", "provider"], ascending=[False, True])
+        st.dataframe(detail, hide_index=True, use_container_width=True)
+        st.download_button(
+            "Download annual source metrics",
+            detail.to_csv(index=False).encode("utf-8"),
+            file_name="washington_imagery_annual_source_metrics.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 
 def main() -> None:
@@ -1282,10 +1462,9 @@ def main() -> None:
     st.markdown(
         """
         <div class="coverage-subtitle">
-        Compare cumulative Mapillary and KartaView imagery availability against
-        the same 240,157 km Overture road denominator. Trends count unique road
-        segments touched through each year; exact annual metrics remain available
-        for audit and recency analysis.
+        See how much of Washington's 240,157 km selected road network has
+        street-view imagery from any available source, how the coverage has grown,
+        and where the remaining gaps are.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1308,13 +1487,16 @@ def main() -> None:
     ]
     complete_comparison = set(PROVIDER_COLORS).issubset(providers)
 
-    status = "Two-provider results ready" if complete_comparison else "KartaView collection in progress"
+    status = (
+        "Statewide coverage snapshot ready"
+        if complete_comparison
+        else "Coverage snapshot still processing"
+    )
     st.markdown(
         f'<span class="status-chip">{status}</span>'
         f'<span class="status-chip">Data updated {latest_data_time()}</span>',
         unsafe_allow_html=True,
     )
-    provider_legend(providers)
 
     with st.sidebar:
         st.header("View controls")
@@ -1332,7 +1514,7 @@ def main() -> None:
             st.cache_data.clear()
             st.rerun()
         st.caption(
-            "Road classes filter the map, cumulative trends, and provider comparison. "
+            "Road classes filter the map and statewide coverage summary. "
             "Refresh after source data changes."
         )
 
@@ -1342,11 +1524,12 @@ def main() -> None:
     cumulative = load_cumulative_coverage(
         str(CUMULATIVE_CSV), file_version(CUMULATIVE_CSV)
     )
+    overlap_history = load_overlap_history(
+        str(OVERLAP_CSV), file_version(OVERLAP_CSV)
+    )
 
     st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
-    explore_tab, trends_tab, compare_tab = st.tabs(
-        ["Explore", "Trends", "Compare"]
-    )
+    explore_tab, coverage_tab = st.tabs(["Explore", "Coverage"])
     with explore_tab:
         render_explore_tab(
             statewide,
@@ -1354,46 +1537,38 @@ def main() -> None:
             selected_classes,
             complete_comparison,
         )
-    with trends_tab:
-        render_trends_tab(
-            cumulative,
-            statewide,
-            by_class,
-            available_years,
-            selected_classes,
-        )
-    with compare_tab:
-        compare_year = st.select_slider(
-            "Compare coverage through year",
+    with coverage_tab:
+        coverage_year = st.select_slider(
+            "Coverage through year",
             options=available_years,
             value=max(available_years),
-            key="compare_cutoff_year",
+            key="coverage_cutoff_year",
         )
         overlap = load_cumulative_overlap(
             str(OVERLAP_CSV),
             file_version(OVERLAP_CSV),
-            compare_year,
+            coverage_year,
         )
-        render_compare_tab(
+        render_coverage_tab(
             cumulative,
             overlap,
+            overlap_history,
+            statewide,
             by_class,
             available_years,
             selected_classes,
-            compare_year,
+            coverage_year,
         )
 
     st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
     st.markdown(
         """
         <div class="method-note">
-        <strong>How to read this dashboard.</strong> Trends and Compare count each
-        canonical road segment once, beginning with the first year in which a
-        provider touches it. The annual source table retains the exact
-        per-year buffered-length calculation. Neither measure indicates image
-        quality, field of view, or current accessibility. KartaView tracks are
-        reconstructed from complete ordered sequence photos; gaps greater than
-        100 metres are not joined.
+        <strong>How to read this dashboard.</strong> Explore and Coverage count each
+        canonical road segment once when imagery from either provider first touches
+        it. The result measures availability, not image quality, field of view, or
+        current accessibility. Provider-specific methods and annual audit metrics
+        are retained under Source details.
         </div>
         """,
         unsafe_allow_html=True,
