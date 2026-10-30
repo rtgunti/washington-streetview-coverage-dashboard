@@ -1315,7 +1315,7 @@ def render_compare_tab(
 
 def main() -> None:
     st.markdown('<div class="coverage-kicker">Washington State · 2020–2026</div>', unsafe_allow_html=True)
-    st.markdown('<div class="coverage-title">Street-view coverage<br>through time</div>', unsafe_allow_html=True)
+    st.markdown('<div class="coverage-title">Street-view coverage<br>across Washington</div>', unsafe_allow_html=True)
     st.markdown(
         """
         <div class="coverage-subtitle">
