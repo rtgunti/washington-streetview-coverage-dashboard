@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 import sqlite3
@@ -28,7 +27,6 @@ MAP_COVERAGE_FILES = {
     "KartaView": DATA_DIR / "kartaview_coverage_2020_2026.fgb",
 }
 WASHINGTON_BOUNDARY = DATA_DIR / "washington_state_boundary.geojson"
-OVERTURE_BACKDROP_PNG = DATA_DIR / "washington_overture_roads_backdrop.png"
 STATE_JSON = DATA_DIR / "statewide_analysis_state.json"
 KARTAVIEW_CACHE = DATA_DIR / "kartaview_cache.sqlite"
 YEARS = list(range(2020, 2027))
@@ -551,13 +549,6 @@ def load_boundary_geojson(path: str, version: int) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-@st.cache_data(show_spinner=False)
-def load_bitmap_data_url(path: str, version: int) -> str:
-    del version
-    encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
-
-
 @st.cache_data(max_entries=5, show_spinner=False)
 def load_local_base_roads(
     path: str,
@@ -800,20 +791,7 @@ def render_covered_roads_map(
             "high": (165, 1.9),
             "full": (210, 2.5),
         }
-        layers = []
-        if OVERTURE_BACKDROP_PNG.is_file():
-            layers.append(
-                pdk.Layer(
-                    "BitmapLayer",
-                    image=load_bitmap_data_url(
-                        str(OVERTURE_BACKDROP_PNG), file_version(OVERTURE_BACKDROP_PNG)
-                    ),
-                    bounds=[-124.95, 45.30, -116.80, 49.20],
-                    opacity=0.85,
-                    pickable=False,
-                )
-            )
-        layers.append(
+        layers = [
             pdk.Layer(
                 "GeoJsonLayer",
                 boundary,
@@ -825,7 +803,7 @@ def render_covered_roads_map(
                 line_width_min_pixels=1.8,
                 pickable=False,
             )
-        )
+        ]
         if focus is not None:
             latitude, longitude, radius_km = focus
 
@@ -938,10 +916,7 @@ def render_covered_roads_map(
         )
         provider_key = "-".join(available_providers)
         years_key = "-".join(str(year) for year in years_to_show)
-        legend_items = [
-            '<span class="map-legend-item"><span class="map-legend-line" '
-            'style="border-color:#5d6963"></span>Overture road network</span>'
-        ]
+        legend_items = []
         for provider in available_providers:
             legend_items.append(
                 '<span class="map-legend-item"><span class="map-legend-line" '
