@@ -1,0 +1,9 @@
+streamlit==1.47.1
+altair==5.5.0
+numpy==1.26.4
+pandas==2.2.3
+pydeck==0.9.1
+geopandas==0.14.4
+shapely==2.1.2
+pyproj==3.7.2
+pyogrio==0.10.0
