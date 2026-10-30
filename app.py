@@ -396,13 +396,12 @@ def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
         .encode(
             x=alt.X(
                 "road_km:Q",
-                title="Road network (km)",
                 stack="zero",
                 axis=alt.Axis(
-                    format="~s",
-                    labelPadding=10,
-                    titlePadding=16,
-                    tickCount=6,
+                    labels=False,
+                    ticks=False,
+                    domain=False,
+                    title=None,
                 ),
             ),
             color=alt.Color(
@@ -419,7 +418,7 @@ def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("share_pct:Q", title="Share", format=".2f"),
             ],
         )
-        .properties(height=160)
+        .properties(height=110)
     )
 
 
@@ -1221,6 +1220,19 @@ def render_compare_tab(
     )
 
     st.subheader("Provider availability across the selected road network")
+    availability = mix.set_index("availability")
+    availability_cols = st.columns(4)
+    for column, category in zip(
+        availability_cols,
+        ("Mapillary only", "Both", "KartaView only", "Neither"),
+    ):
+        if category in availability.index:
+            row = availability.loc[category]
+            column.metric(category, f"{float(row['road_km']):,.0f} km")
+            column.caption(f"{float(row['share_pct']):.2f}% of selected roads")
+        else:
+            column.metric(category, "0 km")
+            column.caption("0.00% of selected roads")
     st.altair_chart(overlap_chart(mix), use_container_width=True)
     st.caption(
         "Teal: Mapillary only · charcoal: both · purple: KartaView only · gray: neither. "
