@@ -387,29 +387,31 @@ def comparison_class_chart(frame: pd.DataFrame) -> alt.Chart:
     )
 
 
-def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
+def overlap_chart(frame: pd.DataFrame) -> alt.VConcatChart:
     order = ["Mapillary only", "Both", "KartaView only", "Neither"]
     colors = [PROVIDER_COLORS["Mapillary"], "#33443d", PROVIDER_COLORS["KartaView"], "#c8ceca"]
-    return (
+    tick_step = 50_000
+    total_road_km = float(frame["road_km"].sum())
+    axis_max = max(tick_step, int(np.ceil(total_road_km / tick_step) * tick_step))
+    tick_values = list(range(0, axis_max + tick_step, tick_step))
+    shared_scale = alt.Scale(domain=[0, axis_max], nice=False)
+
+    bars = (
         alt.Chart(frame)
         .mark_bar(size=42)
         .encode(
             x=alt.X(
                 "road_km:Q",
                 stack="zero",
-                axis=alt.Axis(
-                    labels=False,
-                    ticks=False,
-                    domain=False,
-                    title=None,
-                ),
+                axis=None,
+                scale=shared_scale,
             ),
             color=alt.Color(
                 "availability:N",
                 title=None,
                 sort=order,
                 scale=alt.Scale(domain=order, range=colors),
-                legend=alt.Legend(orient="bottom", direction="horizontal"),
+                legend=alt.Legend(orient="top", direction="horizontal"),
             ),
             order=alt.Order("order:Q"),
             tooltip=[
@@ -418,8 +420,36 @@ def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("share_pct:Q", title="Share", format=".2f"),
             ],
         )
-        .properties(height=110)
+        .properties(height=54)
     )
+    axis = (
+        alt.Chart(pd.DataFrame({"road_km": [0, axis_max]}))
+        .mark_point(opacity=0)
+        .encode(
+            x=alt.X(
+                "road_km:Q",
+                scale=shared_scale,
+                axis=alt.Axis(
+                    values=tick_values,
+                    format=",d",
+                    labelColor="#27332e",
+                    labelFontSize=13,
+                    labelPadding=9,
+                    tickColor="#75827c",
+                    tickSize=7,
+                    domainColor="#75827c",
+                    domainWidth=1,
+                    grid=False,
+                    title="Road network (km)",
+                    titleColor="#46554f",
+                    titleFontSize=13,
+                    titlePadding=16,
+                ),
+            )
+        )
+        .properties(height=1)
+    )
+    return alt.vconcat(bars, axis, spacing=2).resolve_scale(x="shared")
 
 
 def road_class_chart(frame: pd.DataFrame) -> alt.Chart:
