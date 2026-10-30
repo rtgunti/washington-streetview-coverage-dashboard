@@ -1033,8 +1033,7 @@ def render_explore_tab(
     show_source_tracks = bool(st.session_state.get("show_source_tracks", True))
     if cumulative_mode:
         st.caption(
-            "Cumulative modes union unique road segments touched in any included "
-            "year. Exact annual buffered-length metrics remain in Trends → Annual source metrics."
+            "Cumulative mode unions unique road segments touched in any included year."
         )
     if not complete_comparison:
         st.caption("KartaView statewide collection is still in progress; its comparison will update after refresh.")
@@ -1140,93 +1139,6 @@ def cumulative_view(
     return frame, denominator_by_class, selected_denominator
 
 
-def render_trends_tab(
-    cumulative: pd.DataFrame,
-    statewide: pd.DataFrame,
-    by_class: pd.DataFrame,
-    available_years: list[int],
-    selected_classes: list[str],
-) -> None:
-    if not selected_classes:
-        st.info("Select at least one road class in the sidebar.")
-        return
-    trend, _, denominator = cumulative_view(cumulative, by_class, selected_classes)
-    if trend.empty or denominator <= 0:
-        st.info("Cumulative coverage is not available for the selected road classes.")
-        return
-
-    selected_cutoff = st.select_slider(
-        "Coverage through year",
-        options=available_years,
-        value=max(available_years),
-        key="trend_cutoff_year",
-    )
-    selected = trend[trend["cutoff_year"].eq(selected_cutoff)].set_index("provider")
-    metric_cols = st.columns(2)
-    for column, provider in zip(metric_cols, ("Mapillary", "KartaView")):
-        if provider not in selected.index:
-            column.metric(provider, "Pending")
-            continue
-        row = selected.loc[provider]
-        column.metric(
-            f"{provider} through {selected_cutoff} · {row['touched_pct']:.2f}%",
-            f"{row['touched_road_km']:,.0f} km",
-        )
-    st.subheader("Cumulative coverage trend")
-    st.altair_chart(cumulative_chart(trend), use_container_width=True)
-    st.caption(
-        "A road segment enters the cumulative total the first year that provider "
-        "touches it. Repeated coverage in later years is counted once."
-    )
-
-    with st.expander("Annual source metrics"):
-        st.caption(
-            "These are the independently calculated annual buffered-length metrics, "
-            "retained for audit and recency analysis. They are not cumulative."
-        )
-        detail = statewide[
-            [
-                "provider",
-                "capture_year",
-                "covered_road_km",
-                "road_km_with_any_coverage",
-                "segments_with_coverage",
-                "coverage_pct",
-            ]
-        ].sort_values(["capture_year", "provider"], ascending=[False, True])
-        st.dataframe(
-            detail,
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "provider": "Provider",
-                "capture_year": st.column_config.NumberColumn("Year", format="%d"),
-                "covered_road_km": st.column_config.NumberColumn(
-                    "Exact covered km", format="%.0f"
-                ),
-                "road_km_with_any_coverage": st.column_config.NumberColumn(
-                    "Road touched (km)", format="%.0f"
-                ),
-                "segments_with_coverage": st.column_config.NumberColumn(
-                    "Segments", format=",%d"
-                ),
-                "coverage_pct": st.column_config.ProgressColumn(
-                    "Exact annual coverage",
-                    min_value=0.0,
-                    max_value=100.0,
-                    format="%.2f%%",
-                ),
-            },
-        )
-        st.download_button(
-            "Download annual source metrics",
-            detail.to_csv(index=False).encode("utf-8"),
-            file_name="washington_imagery_annual_source_metrics.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-
 def render_compare_tab(
     cumulative: pd.DataFrame,
     overlap: pd.DataFrame,
@@ -1236,7 +1148,7 @@ def render_compare_tab(
     cutoff_year: int,
 ) -> None:
     if not selected_classes:
-        st.info("Select at least one road class in the sidebar.")
+        st.info("Select at least one road class in the filter above.")
         return
     _, denominator_by_class, denominator = cumulative_view(
         cumulative, by_class, selected_classes
@@ -1436,23 +1348,13 @@ def main() -> None:
     )
 
     st.markdown('<div class="section-rule"></div>', unsafe_allow_html=True)
-    explore_tab, trends_tab, compare_tab = st.tabs(
-        ["Explore", "Trends", "Compare"]
-    )
+    explore_tab, compare_tab = st.tabs(["Explore", "Compare"])
     with explore_tab:
         render_explore_tab(
             statewide,
             available_years,
             selected_classes,
             complete_comparison,
-        )
-    with trends_tab:
-        render_trends_tab(
-            cumulative,
-            statewide,
-            by_class,
-            available_years,
-            selected_classes,
         )
     with compare_tab:
         compare_year = st.select_slider(
@@ -1479,13 +1381,12 @@ def main() -> None:
     st.markdown(
         """
         <div class="method-note">
-        <strong>How to read this dashboard.</strong> Trends and Compare count each
-        canonical road segment once, beginning with the first year in which a
-        provider touches it. The annual source table retains the exact
-        per-year buffered-length calculation. Neither measure indicates image
-        quality, field of view, or current accessibility. KartaView tracks are
-        reconstructed from complete ordered sequence photos; gaps greater than
-        100 metres are not joined.
+        <strong>How to read this dashboard.</strong> Cumulative views and Compare
+        count each canonical road segment once, beginning with the first year in
+        which a provider touches it. Coverage indicates imagery availability—not
+        image quality, field of view, or current accessibility. KartaView tracks
+        are reconstructed from complete ordered sequence photos; gaps greater
+        than 100 metres are not joined.
         </div>
         """,
         unsafe_allow_html=True,
