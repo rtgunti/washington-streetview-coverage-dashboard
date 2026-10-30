@@ -387,6 +387,39 @@ def comparison_class_chart(frame: pd.DataFrame) -> alt.Chart:
     )
 
 
+def combined_class_chart(frame: pd.DataFrame) -> alt.LayerChart:
+    road_order = [
+        road_class
+        for road_class in ROAD_CLASS_ORDER
+        if road_class in set(frame["road_class"])
+    ]
+    maximum = float(frame["coverage_pct"].max()) if not frame.empty else 0.0
+    scale_max = max(10.0, maximum * 1.16)
+    base = alt.Chart(frame).encode(
+        y=alt.Y("road_class:N", title=None, sort=road_order),
+        x=alt.X(
+            "coverage_pct:Q",
+            title="Road network with imagery (%)",
+            scale=alt.Scale(domain=[0, scale_max], nice=False),
+        ),
+        tooltip=[
+            alt.Tooltip("road_class:N", title="Road class"),
+            alt.Tooltip("covered_road_km:Q", title="Roads with imagery", format=",.0f"),
+            alt.Tooltip("total_road_km:Q", title="Selected road network", format=",.0f"),
+            alt.Tooltip("coverage_pct:Q", title="Coverage", format=".2f"),
+        ],
+    )
+    bars = base.mark_bar(color="#246b57", cornerRadiusEnd=3)
+    labels = base.mark_text(
+        align="left",
+        baseline="middle",
+        dx=6,
+        color="#27332e",
+        fontSize=12,
+    ).encode(text=alt.Text("coverage_pct:Q", format=".1f"))
+    return (bars + labels).properties(height=360)
+
+
 def overlap_chart(frame: pd.DataFrame) -> alt.VConcatChart:
     order = ["Mapillary only", "Both", "KartaView only", "Neither"]
     colors = [PROVIDER_COLORS["Mapillary"], "#33443d", PROVIDER_COLORS["KartaView"], "#c8ceca"]
@@ -1222,54 +1255,58 @@ def render_compare_tab(
     mix["share_pct"] = np.where(
         denominator > 0, mix["road_km"] / denominator * 100.0, 0.0
     )
-    shared = float(
-        mix.loc[mix["availability"].eq("Both"), "road_km"].sum()
-    )
     combined_pct = union_km / denominator * 100.0 if denominator > 0 else 0.0
     map_pct = float(totals.loc["Mapillary", "touched_pct"]) if "Mapillary" in totals.index else 0.0
     karta_pct = float(totals.loc["KartaView", "touched_pct"]) if "KartaView" in totals.index else 0.0
 
-    metric_cols = st.columns(4)
+    metric_cols = st.columns([1.6, 1, 1])
     metric_cols[0].metric(
-        f"Mapillary · {map_pct:.2f}%",
-        f"{float(totals.loc['Mapillary', 'touched_road_km']):,.0f} km"
-        if "Mapillary" in totals.index else "Pending",
+        f"Total coverage · {union_km:,.0f} km",
+        f"{combined_pct:.2f}%",
     )
     metric_cols[1].metric(
-        f"KartaView · {karta_pct:.2f}%",
-        f"{float(totals.loc['KartaView', 'touched_road_km']):,.0f} km"
-        if "KartaView" in totals.index else "Pending",
+        f"Mapillary · {float(totals.loc['Mapillary', 'touched_road_km']):,.0f} km"
+        if "Mapillary" in totals.index else "Mapillary",
+        f"{map_pct:.2f}%" if "Mapillary" in totals.index else "Pending",
     )
     metric_cols[2].metric(
-        "Shared network",
-        f"{shared:,.0f} km",
-    )
-    metric_cols[3].metric(
-        f"Combined coverage · {union_km:,.0f} km",
-        f"{combined_pct:.2f}%",
+        f"KartaView · {float(totals.loc['KartaView', 'touched_road_km']):,.0f} km"
+        if "KartaView" in totals.index else "KartaView",
+        f"{karta_pct:.2f}%" if "KartaView" in totals.index else "Pending",
     )
 
     st.subheader("Provider availability across the selected road network")
-    availability = mix.set_index("availability")
-    availability_cols = st.columns(4)
-    for column, category in zip(
-        availability_cols,
-        ("Mapillary only", "Both", "KartaView only", "Neither"),
-    ):
-        if category in availability.index:
-            row = availability.loc[category]
-            column.metric(category, f"{float(row['road_km']):,.0f} km")
-            column.caption(f"{float(row['share_pct']):.2f}% of selected roads")
-        else:
-            column.metric(category, "0 km")
-            column.caption("0.00% of selected roads")
     st.altair_chart(overlap_chart(mix), use_container_width=True)
     st.caption(
         "Teal: Mapillary only · charcoal: both · purple: KartaView only · gray: neither. "
         "Availability uses unique Overture segments of at most 50 metres; “both” "
         "means each provider touched the segment by the selected cutoff year."
     )
-    st.subheader("Comparison by road class")
+    combined_class = (
+        selected_overlap.groupby("road_class", as_index=False)
+        .agg(covered_road_km=("road_km", "sum"))
+    )
+    combined_class["total_road_km"] = combined_class["road_class"].map(
+        denominator_by_class
+    )
+    combined_class["coverage_pct"] = np.where(
+        combined_class["total_road_km"] > 0,
+        combined_class["covered_road_km"]
+        / combined_class["total_road_km"]
+        * 100.0,
+        0.0,
+    )
+    st.subheader("Any-source coverage by road class")
+    if combined_class.empty:
+        st.info("No combined coverage is available for these classes.")
+    else:
+        st.altair_chart(combined_class_chart(combined_class), use_container_width=True)
+    st.caption(
+        "Each road segment is counted once when imagery is available from Mapillary, "
+        "KartaView, or both."
+    )
+
+    st.subheader("Provider comparison by road class")
     if provider_class.empty:
         st.info("No cumulative coverage is available for these classes.")
     else:
