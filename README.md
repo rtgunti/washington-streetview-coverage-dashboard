@@ -1,4 +1,4 @@
-# Washington imagery coverage dashboard
+# Washington street-view coverage dashboard
 
 This is a self-contained Streamlit Community Cloud repository for comparing
 Mapillary and KartaView road coverage across Washington State from 2020–2026.
