@@ -1319,10 +1319,9 @@ def main() -> None:
     st.markdown(
         """
         <div class="coverage-subtitle">
-        Compare cumulative Mapillary and KartaView imagery availability against
-        the same 240,157 km Overture road denominator. Trends count unique road
-        segments touched through each year; exact annual metrics remain available
-        for audit and recency analysis.
+        See where Washington's roads have street-view imagery—and where the map
+        still goes dark. Compare Mapillary and KartaView coverage across 240,157 km
+        of Overture roads, by year and road class.
         </div>
         """,
         unsafe_allow_html=True,
