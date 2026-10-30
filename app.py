@@ -392,9 +392,19 @@ def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
     colors = [PROVIDER_COLORS["Mapillary"], "#33443d", PROVIDER_COLORS["KartaView"], "#c8ceca"]
     return (
         alt.Chart(frame)
-        .mark_bar(size=54)
+        .mark_bar(size=42)
         .encode(
-            x=alt.X("road_km:Q", title="Road network (km)", stack="zero"),
+            x=alt.X(
+                "road_km:Q",
+                title="Road network (km)",
+                stack="zero",
+                axis=alt.Axis(
+                    format="~s",
+                    labelPadding=10,
+                    titlePadding=16,
+                    tickCount=6,
+                ),
+            ),
             color=alt.Color(
                 "availability:N",
                 title=None,
@@ -409,7 +419,7 @@ def overlap_chart(frame: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("share_pct:Q", title="Share", format=".2f"),
             ],
         )
-        .properties(height=100)
+        .properties(height=160)
     )
 
 
