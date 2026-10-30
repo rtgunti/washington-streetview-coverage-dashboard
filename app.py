@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import sqlite3
@@ -27,6 +28,7 @@ MAP_COVERAGE_FILES = {
     "KartaView": DATA_DIR / "kartaview_coverage_2020_2026.fgb",
 }
 WASHINGTON_BOUNDARY = DATA_DIR / "washington_state_boundary.geojson"
+OVERTURE_BACKDROP_PNG = DATA_DIR / "washington_overture_roads_backdrop.png"
 STATE_JSON = DATA_DIR / "statewide_analysis_state.json"
 KARTAVIEW_CACHE = DATA_DIR / "kartaview_cache.sqlite"
 YEARS = list(range(2020, 2027))
@@ -84,18 +86,18 @@ st.markdown(
     }
     .coverage-title {
       font-family: Georgia, 'Times New Roman', serif;
-      font-size: clamp(2.1rem, 5vw, 4.2rem);
+      font-size: clamp(2rem, 4vw, 3.35rem);
       font-weight: 500;
-      line-height: 0.98;
+      line-height: 1.02;
       letter-spacing: -0.045em;
-      margin: 0 0 0.7rem 0;
+      margin: 0 0 0.55rem 0;
     }
     .coverage-subtitle {
       color: var(--muted);
       font-size: 1.05rem;
       max-width: 62rem;
       line-height: 1.55;
-      margin-bottom: 1.2rem;
+      margin-bottom: 0.8rem;
     }
     .status-chip {
       display: inline-block;
@@ -115,6 +117,17 @@ st.markdown(
       border-radius: 50%;
       margin-right: 0.35rem;
     }
+    .map-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem 1.15rem;
+      align-items: center;
+      margin: -0.2rem 0 0.65rem;
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+    .map-legend-item { display: inline-flex; align-items: center; gap: 0.4rem; }
+    .map-legend-line { width: 1.7rem; border-top: 4px solid; border-radius: 2px; }
     .section-rule { border-top: 1px solid var(--line); margin: 1.8rem 0 1rem; }
     .method-note {
       background: #eef2ed;
@@ -212,13 +225,15 @@ def parse_coordinate(value: str) -> tuple[float, float]:
 
 
 def latest_data_time() -> str:
-    versions = [file_version(STATEWIDE_CSV), file_version(ROAD_CLASS_CSV)]
-    newest = max(versions)
-    if not newest:
+    if not STATE_JSON.is_file():
         return "not available"
-    return datetime.fromtimestamp(newest / 1_000_000_000).astimezone().strftime(
-        "%b %d, %Y · %H:%M %Z"
-    )
+    try:
+        updated_at = json.loads(STATE_JSON.read_text(encoding="utf-8")).get("updated_at")
+        if not updated_at:
+            return "not available"
+        return datetime.fromisoformat(updated_at).astimezone().strftime("%b %d, %Y")
+    except (OSError, ValueError, json.JSONDecodeError):
+        return "not available"
 
 
 def provider_legend(providers: list[str]) -> None:
@@ -366,7 +381,12 @@ def comparison_class_chart(frame: pd.DataFrame) -> alt.Chart:
                 title=None,
                 sort=[x for x in ROAD_CLASS_ORDER if x in set(frame["road_class"])],
             ),
-            x=alt.X("touched_pct:Q", title="Cumulative road network touched (%)"),
+            x=alt.X(
+                "touched_pct:Q",
+                title="Cumulative road network touched (%)",
+                scale=alt.Scale(domain=[0, 100], nice=False),
+                axis=alt.Axis(values=[0, 20, 40, 60, 80, 100]),
+            ),
             yOffset="provider:N",
             color=alt.Color(
                 "provider:N",
@@ -393,14 +413,15 @@ def combined_class_chart(frame: pd.DataFrame) -> alt.LayerChart:
         for road_class in ROAD_CLASS_ORDER
         if road_class in set(frame["road_class"])
     ]
-    maximum = float(frame["coverage_pct"].max()) if not frame.empty else 0.0
-    scale_max = max(10.0, maximum * 1.16)
+    frame = frame.copy()
+    frame["coverage_label"] = frame["coverage_pct"].map(lambda value: f"{value:.1f}%")
     base = alt.Chart(frame).encode(
         y=alt.Y("road_class:N", title=None, sort=road_order),
         x=alt.X(
             "coverage_pct:Q",
             title="Road network with imagery (%)",
-            scale=alt.Scale(domain=[0, scale_max], nice=False),
+            scale=alt.Scale(domain=[0, 100], nice=False),
+            axis=alt.Axis(values=[0, 20, 40, 60, 80, 100]),
         ),
         tooltip=[
             alt.Tooltip("road_class:N", title="Road class"),
@@ -416,7 +437,7 @@ def combined_class_chart(frame: pd.DataFrame) -> alt.LayerChart:
         dx=6,
         color="#27332e",
         fontSize=12,
-    ).encode(text=alt.Text("coverage_pct:Q", format=".1f"))
+    ).encode(text=alt.Text("coverage_label:N"))
     return (bars + labels).properties(height=360)
 
 
@@ -528,6 +549,13 @@ def road_class_chart(frame: pd.DataFrame) -> alt.Chart:
 def load_boundary_geojson(path: str, version: int) -> dict:
     del version
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+@st.cache_data(show_spinner=False)
+def load_bitmap_data_url(path: str, version: int) -> str:
+    del version
+    encoded = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
 
 
 @st.cache_data(max_entries=5, show_spinner=False)
@@ -772,7 +800,20 @@ def render_covered_roads_map(
             "high": (165, 1.9),
             "full": (210, 2.5),
         }
-        layers = [
+        layers = []
+        if OVERTURE_BACKDROP_PNG.is_file():
+            layers.append(
+                pdk.Layer(
+                    "BitmapLayer",
+                    image=load_bitmap_data_url(
+                        str(OVERTURE_BACKDROP_PNG), file_version(OVERTURE_BACKDROP_PNG)
+                    ),
+                    bounds=[-124.95, 45.30, -116.80, 49.20],
+                    opacity=0.85,
+                    pickable=False,
+                )
+            )
+        layers.append(
             pdk.Layer(
                 "GeoJsonLayer",
                 boundary,
@@ -784,7 +825,7 @@ def render_covered_roads_map(
                 line_width_min_pixels=1.8,
                 pickable=False,
             )
-        ]
+        )
         if focus is not None:
             latitude, longitude, radius_km = focus
 
@@ -884,7 +925,7 @@ def render_covered_roads_map(
                 zoom=zoom_by_radius.get(float(radius_km), 10.7),
             )
         else:
-            view = pdk.ViewState(latitude=47.35, longitude=-120.75, zoom=5.45)
+            view = pdk.ViewState(latitude=47.24, longitude=-120.87, zoom=5.9)
 
         deck = pdk.Deck(
             layers=layers,
@@ -897,6 +938,20 @@ def render_covered_roads_map(
         )
         provider_key = "-".join(available_providers)
         years_key = "-".join(str(year) for year in years_to_show)
+        legend_items = [
+            '<span class="map-legend-item"><span class="map-legend-line" '
+            'style="border-color:#5d6963"></span>Overture road network</span>'
+        ]
+        for provider in available_providers:
+            legend_items.append(
+                '<span class="map-legend-item"><span class="map-legend-line" '
+                f'style="border-color:{PROVIDER_COLORS.get(provider, "#56635d")}"></span>'
+                f'{provider} coverage</span>'
+            )
+        st.markdown(
+            '<div class="map-legend">' + "".join(legend_items) + "</div>",
+            unsafe_allow_html=True,
+        )
         st.pydeck_chart(
             deck,
             use_container_width=True,
@@ -925,8 +980,8 @@ def render_covered_roads_map(
         )
         st.caption(
             f"{time_label} · {location_summary} · {count_summary}. "
-            "Mapillary is teal; KartaView is purple. Wide translucent lines are "
-            "derived covered roads; narrow solid lines are original provider tracks."
+            "Coverage lines are derived Overture roads; when zoomed, narrow solid "
+            "lines show original provider tracks."
             + (
                 " Statewide geometry is generalized to map scale; coordinate searches "
                 "retain full detail."
@@ -1314,19 +1369,6 @@ def render_compare_tab(
 
 
 def main() -> None:
-    st.markdown('<div class="coverage-kicker">Washington State · 2020–2026</div>', unsafe_allow_html=True)
-    st.markdown('<div class="coverage-title">Street-view coverage<br>across Washington</div>', unsafe_allow_html=True)
-    st.markdown(
-        """
-        <div class="coverage-subtitle">
-        See where Washington's roads have street-view imagery—and where the map
-        still goes dark. Compare Mapillary and KartaView coverage across 240,157 km
-        of Overture roads, by year and road class.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     if not STATEWIDE_CSV.is_file() or not ROAD_CLASS_CSV.is_file():
         st.error("Annual coverage CSVs are not available yet.")
         live_collection_status()
@@ -1344,33 +1386,72 @@ def main() -> None:
     ]
     complete_comparison = set(PROVIDER_COLORS).issubset(providers)
 
-    status = "Two-provider results ready" if complete_comparison else "KartaView collection in progress"
+    first_year, latest_year = min(available_years), max(available_years)
     st.markdown(
-        f'<span class="status-chip">{status}</span>'
-        f'<span class="status-chip">Data updated {latest_data_time()}</span>',
+        f'<div class="coverage-kicker">Washington State · {first_year}–{latest_year}</div>',
         unsafe_allow_html=True,
     )
-    provider_legend(providers)
+    st.markdown(
+        '<div class="coverage-title">Street-view coverage across Washington</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+        <div class="coverage-subtitle">
+        See where Washington's roads have street-view imagery—and where the map
+        still goes dark. Compare Mapillary and KartaView coverage across the
+        Overture road network, by year and road class.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<span class="status-chip">Analysis snapshot · {latest_data_time()}</span>',
+        unsafe_allow_html=True,
+    )
+    if not complete_comparison:
+        st.warning("KartaView collection is still in progress; comparison results are incomplete.")
 
-    with st.sidebar:
-        st.header("View controls")
-        road_options = [
-            rc
-            for rc in ROAD_CLASS_ORDER
-            if rc in set(by_class.loc[~by_class["road_class"].eq("ALL"), "road_class"])
-        ]
+    road_options = [
+        rc
+        for rc in ROAD_CLASS_ORDER
+        if rc in set(by_class.loc[~by_class["road_class"].eq("ALL"), "road_class"])
+    ]
+    if "selected_road_classes" not in st.session_state:
+        st.session_state["selected_road_classes"] = road_options
+    selected_before = [
+        road_class
+        for road_class in st.session_state["selected_road_classes"]
+        if road_class in road_options
+    ]
+    with st.expander(
+        f"Road classes · {len(selected_before)} of {len(road_options)} selected"
+    ):
         selected_classes = st.multiselect(
-            "Road classes",
+            "Road classes included in every map and metric",
             road_options,
-            default=road_options,
+            key="selected_road_classes",
         )
-        if st.button("Refresh data", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-        st.caption(
-            "Road classes filter the map, cumulative trends, and provider comparison. "
-            "Refresh after source data changes."
+    denominator_by_class = (
+        by_class.loc[~by_class["road_class"].eq("ALL")]
+        .drop_duplicates("road_class")
+        .set_index("road_class")["total_road_km"]
+        .astype(float)
+        .to_dict()
+    )
+    selected_road_km = sum(
+        denominator_by_class.get(road_class, 0.0) for road_class in selected_classes
+    )
+    selection_name = (
+        "All road classes"
+        if len(selected_classes) == len(road_options)
+        else (
+            "1 road class"
+            if len(selected_classes) == 1
+            else f"{len(selected_classes)} road classes"
         )
+    )
+    st.caption(f"Road network in view: {selection_name} · {selected_road_km:,.0f} km")
 
     if not CUMULATIVE_CSV.is_file() or not OVERLAP_CSV.is_file():
         st.error("The packaged cumulative comparison tables are missing.")
