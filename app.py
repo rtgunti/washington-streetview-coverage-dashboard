@@ -31,6 +31,12 @@ STATE_JSON = DATA_DIR / "statewide_analysis_state.json"
 KARTAVIEW_CACHE = DATA_DIR / "kartaview_cache.sqlite"
 YEARS = list(range(2020, 2027))
 PROVIDER_COLORS = {"Mapillary": "#168f75", "KartaView": "#7856c8"}
+DEFAULT_COVERAGE_RASTERS = {
+    "Mapillary": "app/static/mapillary_coverage_default.png",
+    "KartaView": "app/static/kartaview_coverage_default.png",
+}
+DEFAULT_COVERAGE_COUNTS = {"Mapillary": 764_718, "KartaView": 299_710}
+DEFAULT_RASTER_BOUNDS = [-124.95, 45.30, -116.80, 49.20]
 ROAD_CLASS_ORDER = [
     "motorway",
     "trunk",
@@ -778,6 +784,11 @@ def render_covered_roads_map(
             "provider layers yet."
         )
         return
+    use_fast_statewide = (
+        focus is None
+        and tuple(years_to_show) == tuple(YEARS)
+        and set(road_classes) == set(ROAD_CLASS_ORDER)
+    )
 
     try:
         import pydeck as pdk
@@ -810,6 +821,19 @@ def render_covered_roads_map(
         segment_counts: dict[str, int] = {}
         track_counts: dict[str, int] = {}
         for provider in available_providers:
+            track_counts[provider] = 0
+            if use_fast_statewide:
+                segment_counts[provider] = DEFAULT_COVERAGE_COUNTS[provider]
+                layers.append(
+                    pdk.Layer(
+                        "BitmapLayer",
+                        image=f"'{DEFAULT_COVERAGE_RASTERS[provider]}'",
+                        bounds=DEFAULT_RASTER_BOUNDS,
+                        opacity=1.0,
+                        pickable=False,
+                    )
+                )
+                continue
             coverage_layers, segment_counts[provider] = load_covered_road_geojson(
                 str(coverage_paths[provider]),
                 file_version(coverage_paths[provider]),
@@ -838,7 +862,6 @@ def render_covered_roads_map(
                     )
                 )
 
-            track_counts[provider] = 0
             if focus is not None and show_source_tracks:
                 source_tracks, track_counts[provider] = load_local_provider_tracks(
                     provider,
@@ -903,7 +926,7 @@ def render_covered_roads_map(
                 zoom=zoom_by_radius.get(float(radius_km), 10.7),
             )
         else:
-            view = pdk.ViewState(latitude=47.24, longitude=-120.87, zoom=5.9)
+            view = pdk.ViewState(latitude=47.24, longitude=-120.87, zoom=7.0)
 
         deck = pdk.Deck(
             layers=layers,
@@ -916,6 +939,7 @@ def render_covered_roads_map(
         )
         provider_key = "-".join(available_providers)
         years_key = "-".join(str(year) for year in years_to_show)
+        classes_key = "-".join(road_classes)
         legend_items = []
         for provider in available_providers:
             legend_items.append(
@@ -932,7 +956,7 @@ def render_covered_roads_map(
             use_container_width=True,
             height=560,
             key=(
-                f"covered-road-map-v5-{provider_key}-{years_key}-"
+                f"covered-road-map-v6-{provider_key}-{years_key}-{classes_key}-"
                 f"{focus if focus is not None else 'statewide'}-{show_source_tracks}"
             ),
         )
@@ -955,12 +979,19 @@ def render_covered_roads_map(
         )
         st.caption(
             f"{time_label} · {location_summary} · {count_summary}. "
-            "Coverage lines are derived Overture roads; when zoomed, narrow solid "
-            "lines show original provider tracks."
+            + (
+                "Fast statewide overview. Change the year, road classes, or location "
+                "to load detailed vector coverage."
+                if use_fast_statewide
+                else (
+                    "Coverage lines are derived Overture roads; when zoomed, narrow "
+                    "solid lines show original provider tracks."
+                )
+            )
             + (
                 " Statewide geometry is generalized to map scale; coordinate searches "
                 "retain full detail."
-                if focus is None
+                if focus is None and not use_fast_statewide
                 else ""
             )
         )
