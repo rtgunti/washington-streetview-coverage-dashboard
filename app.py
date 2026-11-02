@@ -926,7 +926,7 @@ def render_covered_roads_map(
                 zoom=zoom_by_radius.get(float(radius_km), 10.7),
             )
         else:
-            view = pdk.ViewState(latitude=47.24, longitude=-120.87, zoom=7.0)
+            view = pdk.ViewState(latitude=47.24, longitude=-120.87, zoom=6.7)
 
         deck = pdk.Deck(
             layers=layers,
